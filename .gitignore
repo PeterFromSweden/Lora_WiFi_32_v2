@@ -1,0 +1,10 @@
+# Ignore everything
+*
+
+# Except for these files
+!.gitignore
+!Site_checker/
+!Site_checker/Site_checker.ino
+!libraries/
+!libraries/ExtendedDisplay
+!libraries/ExtendedDisplay/*
