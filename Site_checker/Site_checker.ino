@@ -24,6 +24,8 @@ void setup() {
   //VextOutput(true);
   // Initialize OLED display
   display.init();
+  display.println("FW 1.0.0");
+  delay(1000);
 }
 
 void loop() {
