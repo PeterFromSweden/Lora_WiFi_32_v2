@@ -17,14 +17,14 @@ bool ledBlink = false;
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  delay(100);
   Serial.println("---------------");
   pinMode(LED, OUTPUT);
   //pinMode(Vext, OUTPUT);
   //VextOutput(true);
   // Initialize OLED display
   display.init();
-  display.println("FW 1.0.0");
+  display.println("FW 1.0.1");
   delay(1000);
 }
 
@@ -54,22 +54,25 @@ void sleepDelay(int millisec)
   esp_light_sleep_start();
 }
 
+bool waitForWifi(int timeoutMs = 8000) {
+  unsigned long start = millis();
+  while (WiFi.status() != WL_CONNECTED) {
+    if (millis() - start > timeoutMs) return false;
+    delay(200);
+  }
+  return true;
+}
+
 void connectToWifi() {
   if (WiFi.status() != WL_CONNECTED) {
-    // Connect to Wi-Fi
+    WiFi.mode(WIFI_OFF);
+    delay(50);
     WiFi.mode(WIFI_STA);
     WiFi.begin(ssid, password);
-    //display.clear();
-    //display.println("Connect to WiFi..");
-    //display.display();
-    while (WiFi.status() != WL_CONNECTED) {
-      delay(1000);
-      //Serial.println(".");
+    if (!waitForWifi()) {
+      displayError("WiFi Timeout");
     }
-    //Serial.println("Connected to WiFi");
-    //display.println("Ok");
-    //display.display();
-    delay(1000);
+    delay(300); // allow DHCP + DNS settle
   }
 }
 
@@ -82,75 +85,88 @@ void disconnectWifi()
   WiFi.mode(WIFI_OFF);
 }
 
+int httpGetWithRetry(HTTPClient &http, int retries = 3) {
+  int code;
+  for (int i = 0; i < retries; i++) {
+    code = http.GET();
+    if (code > 0) return code;
+    Serial.printf("HTTP GET failed (%d), retry %d\n", code, i+1);
+    delay(300);
+  }
+  return code;
+}
+
 void fetchAndDisplayWeather() {
   static int displayCount = 0;
 
+  // Etablish WiFi
   connectToWifi();
-  if (WiFi.status() == WL_CONNECTED) {
-    HTTPClient http;
-    http.begin(serverUrl);
-    int httpResponseCode = http.GET();
-    
-    display.clearScreen();
-    if (httpResponseCode > 0) {
-      String payload = http.getString();
-      //Serial.println(payload);
-      
-      StaticJsonDocument<200> doc;
-      DeserializationError error = deserializeJson(doc, payload);
-      
-      if (error) {
-        Serial.println("Parsing failed");
-        displayError("JSON parse error");
-        return;
-      }
-      
-      int warning = doc["warning"];
-      JsonArray toDisplay;
-      if( warning )
-      {
-        ledBlink = true;
-        toDisplay = doc["site-check"];
-      }
-      else
-      {
-        ledBlink = false;
-        toDisplay = doc["weather"];
-      }
-      
-      if(toDisplay.size() < 4)
-      {
-        display.setFont(ArialMT_Plain_24, 21);
-      }
-      else if(toDisplay.size() < 5)
-      {
-        display.setFont(ArialMT_Plain_16, 16);
-      }
-      else
-      {
-        display.setFont(ArialMT_Plain_10, 9);
-      }
-      display.clear();
-      
-      for(const char *item : toDisplay)
-      {
-        display.println(item);
-        //Serial.println(item);
-      }
-      Serial.printf("Display #%i\n", displayCount++);
-      display.display();
-    }
-    else {
-      Serial.print("Error code: ");
-      Serial.println(httpResponseCode);
-      displayError("HTTP Error " + String(httpResponseCode));
-    }
-    http.end();
-  }
-  else {
-    Serial.println("WiFi Disconnected");
+  if (WiFi.status() != WL_CONNECTED) {
     displayError("WiFi Disconnected");
+    return;
   }
+
+  // Get HTTP response
+  HTTPClient http;
+  http.setTimeout(6000);       // default is too low
+  http.setReuse(false);        // prevents stale sockets
+  http.begin(serverUrl);
+  
+  int httpResponseCode = httpGetWithRetry(http);
+  if (httpResponseCode <= 0) {
+    displayError("HTTP Fail " + String(httpResponseCode));
+    return;
+  }
+
+  // Deserialize
+  display.clearScreen();
+  String payload = http.getString();
+  
+  StaticJsonDocument<200> doc;
+  DeserializationError error = deserializeJson(doc, payload);
+  
+  if (error) {
+    displayError("JSON parse error");
+    return;
+  }
+  
+  // Warning or not?
+  int warning = doc["warning"];
+  JsonArray toDisplay;
+  if( warning )
+  {
+    ledBlink = true;
+    toDisplay = doc["site-check"];
+  }
+  else
+  {
+    ledBlink = false;
+    toDisplay = doc["weather"];
+  }
+  
+  // Now we want to display 'toDisplay'
+  if(toDisplay.size() < 4)
+  {
+    display.setFont(ArialMT_Plain_24, 21);
+  }
+  else if(toDisplay.size() < 5)
+  {
+    display.setFont(ArialMT_Plain_16, 16);
+  }
+  else
+  {
+    display.setFont(ArialMT_Plain_10, 9);
+  }
+  display.clear();
+  
+  for(const char *item : toDisplay)
+  {
+    display.println(item);
+  }
+  display.display();
+
+  http.end();
+
   disconnectWifi();
 }
 
